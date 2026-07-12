@@ -1,19 +1,12 @@
-
-//orchestrates the full server side pipeline for one inbound packet from a bridgenode
-
+import java.time.Instant;
 import java.util.logging.Logger;
 
-/**
- * 1 -> hash the ciphertext
- * 2 -> try to claim that hash via idempotency cache
- * -> if already claimed : this is a duplicate , drop it
- * 3 -> decrypt the ciphertext , with servers private key.
- * -> if decryption fails , it is tampered ir junk
- * 4 -> check freshness , chek if signedAt is too old
- * 5 -> hand off to settlement service for the actual debit/card
- * BridgeIngestionService
- */
-@service
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+
+@Service
 public class BridgeIngestionService {
   private static final Logger log = LoggerFactory.getLogger(BridgeIngestionService.class);
 
@@ -24,18 +17,64 @@ public class BridgeIngestionService {
   @Autowired
   private SettlementService settlement;
 
-  @Value("${upi.mesh.packet-max-age-seconds: 86400}")
+  @Value("${upi.mesh.packet-max-age-seconds:86400}")
   private long maxAgeSeconds;
 
-  public IngestResult ingest(MeshPacket packet , String bridgeNodeId , int hopCount){
+  public IngestResult ingest(MeshPacket packet, String bridgeNodeId, int hopCount) {
     try {
-      String HashPacket = crypto.hashCiphertext(packet.getCiphertext());
+      String packetHash = crypto.hashCiphertext(packet.getCiphertext());
 
-      // --- Idempotency gate --- 
-      if(!idempotency.claim(packetHash)) {
-        log.info(null);
+      // --- Idempotency gate ---
+      if (!idempotency.claim(packetHash)) {
+        log.info("Duplicate packet {} from bridge {} - dropped",
+            packetHash.substring(0, 12) + "...", bridgeNodeId);
+
+        return IngestResult.duplicate(packetHash);
       }
+
+      // --- Decrypt ---
+      PaymentInstruction instruction;
+      try {
+        instruction = crypto.decrypt(packet.getcipherText());
+      } catch (Exception e) {
+        log.warn("Decryption failed for packet {}: {}",
+            packetHash.substring(0, 12) + "...", e.getMessage());
+        return IngestionResult.invalid(packetHash, "decryption_failed");
+      }
+
+      // --- Freshness check (replay protection) ---
+      long ageSeconds = (Instant.now().toEpochMilli() - instruction.getSignedAt()) / 1000;
+      if (ageSeconds > maxAgeSeconds) {
+        log.warn("Packet {} too old ({}s), rejected",
+            packetHash.substring(0, 12) + "...", ageSeconds);
+        return IngestResult.invalid(packetHash, "stale_packet");
+      }
+
+      if (ageSeconds < -300) {
+        // small clock-screw tolerance
+        return IngestionResult.invalid(packetHash, "future_dated");
+      }
+
+      // ---- Settle ----
+      Transaction tx = settlement.settle(instruction, packetHash, bridgeNodeId, hopCount);
+      return IngestResult.settled(packetHash, tx);
+    } catch (Exception e) {
+      log.error("Ingestion error: {}", e.getMessage(), e);
+      return IngestResult.invalid("?", "internal_error: " + e.getMessage());
     }
   }
 
+  public record IngestResult(String outcome, String packetHash, String reason, Long transactionId) {
+    public static IngestResult settled(String hash, Transaction tx) {
+      return new IngestResult("SETTLED", hash, null, tx.getId());
+    }
+
+    public static IngestResult duplicate(String hash) {
+      return new IngestResult("DUPLICATE_DROPPED", hash, null, null);
+    }
+
+    public static IngestResult invalid(String hash, String reason) {
+      return new IngestResult("INVALID", hash, reason, null);
+    }
+  }
 }
