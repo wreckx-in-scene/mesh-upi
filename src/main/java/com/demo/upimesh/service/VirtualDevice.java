@@ -1,9 +1,19 @@
+package com.demo.upimesh.service;
+
+import com.demo.upimesh.model.MeshPacket;
+
+import java.util.Collection;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-// a simulated phone in the mesh
-// in the real system this state would be on a physical android device , 
-// with packets exchanged via BLE GATT characterstics
+/**
+ * A simulated phone in the mesh. Holds packets it has seen.
+ *
+ * In the real system, this state would be on a physical Android device,
+ * with packets exchanged via BLE GATT characteristics.
+ */
 public class VirtualDevice {
+
   private final String deviceId;
   private final boolean hasInternet;
   private final Map<String, MeshPacket> heldPackets = new ConcurrentHashMap<>();
@@ -34,7 +44,7 @@ public class VirtualDevice {
   }
 
   public int packetCount() {
-    return heldPackets.containsKey(packetId);
+    return heldPackets.size();
   }
 
   public void clear() {
