@@ -1,16 +1,20 @@
+package com.demo.upimesh.model;
+
+import jakarta.persistence.*;
+
 import java.math.BigDecimal;
+import java.time.Instant;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.Id;
-import jakarta.persistence.Index;
-import jakarta.persistence.Table;
-
+/**
+ * Permanent record of every settled transaction. Once written, never modified.
+ * The packetHash is the idempotency key — uniqueness is enforced at the DB
+ * level
+ * as a defense-in-depth fallback if the Redis-style cache layer ever fails.
+ */
 @Entity
-@Table(name = "transaction", indexes = { @Index(name = "idx_packet_hash", columnList = "packatHash", unique = true) })
+@Table(name = "transactions", indexes = { @Index(name = "idx_packet_hash", columnList = "packetHash", unique = true) })
 public class Transaction {
+
   @Id
   @GeneratedValue(strategy = GenerationType.IDENTITY)
   private Long id;
@@ -28,22 +32,22 @@ public class Transaction {
   private BigDecimal amount;
 
   @Column(nullable = false)
-  private Instant sighnedAt; // when the sender orignally signed it
+  private Instant signedAt; // When the sender originally signed it (offline)
 
   @Column(nullable = false)
-  private Instant settledAt; // when the server actually processed it
+  private Instant settledAt; // When the backend actually processed it
 
   @Column(nullable = false)
-  private String bridgeNodeId;
+  private String bridgeNodeId; // Which mesh node finally delivered it
 
   @Column(nullable = false)
-  private int hopCount; // how many devices it passed through
+  private int hopCount; // How many devices it passed through
 
   @Enumerated(EnumType.STRING)
   @Column(nullable = false)
-  private Stauts status;
+  private Status status;
 
-  private enum Status {
+  public enum Status {
     SETTLED, REJECTED
   }
 
